@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_zip:
-        description: 'Optional ZIP filename at the repository root; leave blank to auto-detect or use checked-out files'
+        description: 'Optional ZIP filename at the repository root; leave blank to auto-detect'
         required: false
         type: string
         default: ''
@@ -15,7 +15,6 @@ on:
       - 'app/**'
       - '*.gradle.kts'
       - 'gradle.properties'
-      - 'scripts/**'
       - '.github/workflows/android-apk.yml'
 
 permissions:
@@ -28,10 +27,35 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Prepare source (auto-extract uploaded ZIP when present)
+      - name: Prepare source (extract ZIP when present)
         env:
           SOURCE_ZIP: ${{ inputs.source_zip }}
-        run: bash scripts/prepare-zip-source.sh "$SOURCE_ZIP"
+        run: |
+          set -euo pipefail
+          ZIP_PATH="$SOURCE_ZIP"
+          if [[ -z "$ZIP_PATH" ]]; then
+            if [[ -f NESLauncher_ARM64_GitHub_Easy_Update.zip ]]; then
+              ZIP_PATH=NESLauncher_ARM64_GitHub_Easy_Update.zip
+            else
+              ZIP_PATH="$(ls -t *.zip 2>/dev/null | head -n 1 || true)"
+            fi
+          fi
+          if [[ -z "$ZIP_PATH" ]]; then
+            echo "No root-level ZIP found; using checked-out files."
+            test -f settings.gradle.kts
+            exit 0
+          fi
+          [[ -f "$ZIP_PATH" ]] || { echo "ERROR: ZIP not found: $ZIP_PATH"; exit 2; }
+          echo "Using ZIP: $ZIP_PATH"
+          unzip -tq "$ZIP_PATH"
+          TMP_DIR="$(mktemp -d)"
+          unzip -q "$ZIP_PATH" -d "$TMP_DIR"
+          PROJECT_FILE="$(find "$TMP_DIR" -type f -name settings.gradle.kts -print -quit)"
+          [[ -n "$PROJECT_FILE" ]] || { echo "ERROR: settings.gradle.kts not found in ZIP"; exit 4; }
+          PROJECT_ROOT="$(dirname "$PROJECT_FILE")"
+          cp -a "$PROJECT_ROOT"/. .
+          ls -la
+          test -f app/build.gradle.kts
 
       - name: Run native unit tests (ASan + UBSan)
         run: |
