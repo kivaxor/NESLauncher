@@ -27,11 +27,41 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Prepare source (auto-extract uploaded ZIP when present)
         env:
           SOURCE_ZIP: ${{ inputs.source_zip }}
-        run: bash scripts/prepare-zip-source.sh "$SOURCE_ZIP"
+        run: |
+          set -euo pipefail
+          ZIP_PATH="$SOURCE_ZIP"
+          if [[ -z "$ZIP_PATH" ]]; then
+            if [[ -f NESLauncher_ARM64_GitHub_Easy_Update.zip ]]; then
+              ZIP_PATH=NESLauncher_ARM64_GitHub_Easy_Update.zip
+            else
+              ZIP_PATH="$(for f in *.zip; do
+                  [[ -f "$f" ]] || continue
+                  printf '%s %s\n' "$(git log -1 --format=%ct -- "$f")" "$f"
+                done | sort -nr | head -n 1 | cut -d' ' -f2-)"
+            fi
+          fi
+          if [[ -z "$ZIP_PATH" ]]; then
+            echo "No root-level ZIP found; using checked-out files."
+            exit 0
+          fi
+          [[ -f "$ZIP_PATH" ]] || { echo "ERROR: source ZIP not found: $ZIP_PATH"; exit 2; }
+          unzip -tq "$ZIP_PATH"
+          if unzip -Z1 "$ZIP_PATH" | grep -E '^/|(^|/)\.\.(/|$)'; then
+            echo "ERROR: unsafe path in ZIP"; exit 3
+          fi
+          TMP_DIR="$(mktemp -d)"
+          unzip -q "$ZIP_PATH" -d "$TMP_DIR"
+          SETTINGS="$(find "$TMP_DIR" -type f -name settings.gradle.kts -print -quit)"
+          [[ -n "$SETTINGS" ]] || { echo "ERROR: ZIP has no settings.gradle.kts"; exit 4; }
+          cp -a "$(dirname "$SETTINGS")/." .
+          echo "Prepared Android project from $ZIP_PATH"
+          ls
 
       - name: Run native unit tests (ASan + UBSan)
         run: |
